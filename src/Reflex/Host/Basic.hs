@@ -27,6 +27,7 @@ For some usage examples, see
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE MultiParamTypeClasses      #-}
 {-# LANGUAGE RankNTypes                 #-}
+{-# LANGUAGE ScopedTypeVariables        #-}
 {-# LANGUAGE TypeFamilies               #-}
 {-# LANGUAGE UndecidableInstances       #-}
 
@@ -35,6 +36,7 @@ module Reflex.Host.Basic
   -- * Running the host
     basicHostWithQuit
   , basicHostForever
+  , basicHostWithStaticEvents
 
   -- * Types
   , BasicGuest
@@ -45,23 +47,25 @@ module Reflex.Host.Basic
   , repeatUntilQuit_
   ) where
 
-import Control.Concurrent (forkIO)
-import Control.Concurrent.Chan (newChan, readChan)
-import Control.Concurrent.STM.TVar (newTVarIO, writeTVar, readTVarIO)
-import Control.Lens ((<&>))
-import Control.Monad (void, when, unless)
-import Control.Monad.Fix (MonadFix)
-import Control.Monad.Primitive (PrimMonad)
-import Control.Monad.Ref (MonadRef(..))
-import Control.Monad.STM (atomically)
-import Control.Monad.Trans (MonadIO(..), MonadTrans(..))
-import Data.Dependent.Sum (DSum(..), (==>))
-import Data.Foldable (for_, traverse_)
-import Data.Functor.Identity (Identity)
-import Data.Maybe (catMaybes, isJust)
-import Data.Traversable (for)
-import Reflex
-import Reflex.Host.Class
+import           Control.Concurrent          (forkIO)
+import           Control.Concurrent.Chan     (newChan, readChan)
+import           Control.Concurrent.STM.TVar (newTVarIO, readTVarIO, writeTVar)
+import           Control.Exception.Base      (BlockedIndefinitelyOnMVar (..),
+                                              catch)
+import           Control.Lens                ((<&>))
+import           Control.Monad               (forM, unless, void, when)
+import           Control.Monad.Fix           (MonadFix)
+import           Control.Monad.Primitive     (PrimMonad)
+import           Control.Monad.Ref           (MonadRef (..))
+import           Control.Monad.STM           (atomically)
+import           Control.Monad.Trans         (MonadIO (..), MonadTrans (..))
+import           Data.Dependent.Sum          (DSum (..), (==>))
+import           Data.Foldable               (for_, traverse_)
+import           Data.Functor.Identity       (Identity)
+import           Data.Maybe                  (catMaybes, isJust)
+import           Data.Traversable            (for)
+import           Reflex
+import           Reflex.Host.Class
 
 -- | Constraints provided by a 'BasicGuest', when run by
 -- 'basicHostWithQuit' or 'basicHostForever'.
@@ -321,3 +325,85 @@ repeatUntilQuit_ act eQuit = do
 
   performEvent_ $ liftIO (atomically $ writeTVar tHasQuit True) <$ eQuit
   performEvent_ $ liftIO (void $ forkIO loop) <$ ePostBuild
+
+
+
+
+
+-- TODO change implementation of this to work with DMap k (Event t (k a)) and [DMap k Identity]
+-- interface can stay the same since most use cases won't need DMap
+
+-- | Run a 'BasicGuest' with list of inputs created from passed in method and
+-- returns a list of outputs for each frame for each input.
+--
+-- The method takes an event that will fire once for each input in sequence
+-- and returns a 'BasicGuest' which produces an output event that is tracked.
+--
+-- The output disregards outputs from 'PostBuild' events.
+--
+-- Each input value may trigger several frames. The results are collected in a
+-- list for each input frame. Trigger events are also collected in the output
+-- for the input value they happened to trigger on.
+--
+-- Asynchronously fired trigger events are not guaranteed to be processed.
+--
+-- If your network does not make use of 'performEvent' or external trigger
+-- events then you can 'join' the final IO output for '[Maybe b]' which is the
+-- output event value for each input value in the input list.
+--
+-- Also relevant comments for 'basicHostWithQuit' apply here too
+basicHostWithStaticEvents
+  :: forall a b.
+  [a] -- ^ list of input events to fire
+  -> (forall t m. BasicGuestConstraints t m => Event t a -> BasicGuest t m (Event t b)) -- ^ function producing network from input events
+  -> IO [[Maybe b]] -- ^ list of fired output events per input per frame that got processed for that input
+basicHostWithStaticEvents inputs guestfn =
+  withSpiderTimeline $ runSpiderHostForTimeline $ do
+
+    triggerEventChan <- liftIO newChan
+    (postBuild, postBuildTriggerRef) <- newEventWithTriggerRef
+    (inputEvent, inputEventTriggerRef) <- newEventWithTriggerRef
+    (eOutput, FireCommand fire) <- hostPerformEventT
+      . flip runTriggerEventT triggerEventChan
+      . flip runPostBuildT postBuild
+      $ unBasicGuest (guestfn inputEvent)
+
+    hOutput <- subscribeEvent eOutput
+    let
+      runFrame firings = fire firings (readEvent hOutput >>= sequenceA)
+
+    -- fire PostBuild event and ignore outputs
+    readRef postBuildTriggerRef
+      >>= traverse_ (\t -> runFrame [t ==> ()])
+
+    forM inputs $ \input -> do
+      -- run network for input
+      inputET <- readRef inputEventTriggerRef
+      outputs <- case inputET of
+        Nothing -> error "no input trigger ref, this should never happen"
+        Just x  -> runFrame [x ==> input]
+
+
+
+      let
+        prepareFiring
+          :: (MonadRef m, Ref m ~ Ref IO)
+          => DSum (EventTriggerRef t) TriggerInvocation
+          -> m (Maybe (DSum (EventTrigger t) Identity))
+        prepareFiring (EventTriggerRef er :=> TriggerInvocation x _)
+          = readRef er <&> fmap (==> x)
+
+      -- now run the network again if there are any trigger events
+      eventsAndTriggers <- liftIO $ catch (readChan triggerEventChan) (\BlockedIndefinitelyOnMVar -> return [])
+      triggerOutputs <- do
+        triggers <- (catMaybes <$> for eventsAndTriggers prepareFiring)
+        case triggers of
+          [] -> return []
+          _  -> runFrame triggers
+
+      -- fire IO callbacks for each event we triggered this frame
+      liftIO . for_ eventsAndTriggers $
+        \(_ :=> TriggerInvocation _ cb) -> cb
+
+      -- return collected output
+      return $ outputs <> triggerOutputs
