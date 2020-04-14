@@ -397,16 +397,17 @@ basicHostWithStaticEvents inputs guestfn =
 
       -- now run the network again if there are any trigger events
       eventsAndTriggers <- liftIO $ catch (readChan triggerEventChan) (\BlockedIndefinitelyOnMVar -> return [])
+      liftIO $ print 6
       triggerOutputs <- do
         triggers <- (catMaybes <$> for eventsAndTriggers prepareFiring)
         case triggers of
           [] -> return []
           _  -> runFrame triggers
 
-      liftIO $ print 6
+      liftIO $ print 7
       -- fire IO callbacks for each event we triggered this frame
       liftIO . for_ eventsAndTriggers $
         \(_ :=> TriggerInvocation _ cb) -> cb
-      liftIO $ print 7
+      liftIO $ print ("8 " <> show outputs <> " " <> show triggerOutputs)
       -- return collected output
       return $ outputs <> triggerOutputs
