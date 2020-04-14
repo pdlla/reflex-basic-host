@@ -405,9 +405,12 @@ basicHostWithStaticEvents inputs guestfn =
           _  -> runFrame triggers
 
       liftIO $ print 7
+
       -- fire IO callbacks for each event we triggered this frame
-      liftIO . for_ eventsAndTriggers $
-        \(_ :=> TriggerInvocation _ cb) -> cb
+      --liftIO . for_ eventsAndTriggers $
+      --  \(_ :=> TriggerInvocation _ cb) -> cb
+
+
       liftIO $ print ("8 " <> show outputs <> " " <> show triggerOutputs)
       -- return collected output
       return $ outputs <> triggerOutputs
