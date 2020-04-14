@@ -333,23 +333,27 @@ repeatUntilQuit_ act eQuit = do
 -- TODO change implementation of this to work with DMap k (Event t (k a)) and [DMap k Identity]
 -- interface can stay the same since most use cases won't need DMap
 
+-- TODO remove TriggerEvent constraint. Not possible to do this with blocking chan :\
+
 -- | Run a 'BasicGuest' with list of inputs created from passed in method and
 -- returns a list of outputs for each frame for each input.
 --
 -- The method takes an event that will fire once for each input in sequence
 -- and returns a 'BasicGuest' which produces an output event that is tracked.
 --
--- The output disregards outputs from 'PostBuild' events.
+-- The output disregards outputs from the 'PostBuild' event which fires only
+-- once after the network is first setup.
 --
 -- Each input value may trigger several frames. The results are collected in a
--- list for each input frame. Trigger events are also collected in the output
--- for the input value they happened to trigger on.
+-- list for each input frame.
+--
+-- Trigger events are NOT processed!! TODO remove TriggerEvent constraint!!
 --
 -- Asynchronously fired trigger events are not guaranteed to be processed.
 --
--- If your network does not make use of 'performEvent' or external trigger
--- events then you can 'join' the final IO output for '[Maybe b]' which is the
--- output event value for each input value in the input list.
+-- If your network does not make use of 'performEvent' then you can 'join' the
+-- final IO output for '[Maybe b]' which is the output event value for each
+-- input value in the input list.
 --
 -- Also relevant comments for 'basicHostWithQuit' apply here too
 basicHostWithStaticEvents
@@ -379,12 +383,16 @@ basicHostWithStaticEvents inputs guestfn =
     forM inputs $ \input -> do
       -- run network for input
       inputET <- readRef inputEventTriggerRef
-      outputs <- case inputET of
+      case inputET of
         Nothing -> error "no input trigger ref, this should never happen"
         Just x  -> runFrame [x ==> input]
 
-
-
+      -- sadly, the below does not work due to inability to read the trigger
+      -- channel without blocking. The catch trick below takes a while and
+      -- seems to be incompatible with HUnit for some reason. We could fix this
+      -- by starting a thread to read event triggers and passing them down an
+      -- non-blocking channel to here if we really want.
+      {-
       let
         prepareFiring
           :: (MonadRef m, Ref m ~ Ref IO)
@@ -407,3 +415,4 @@ basicHostWithStaticEvents inputs guestfn =
 
       -- return collected output
       return $ outputs <> triggerOutputs
+      -}
