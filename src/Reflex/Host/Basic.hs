@@ -353,13 +353,13 @@ repeatUntilQuit_ act eQuit = do
 --
 -- Also relevant comments for 'basicHostWithQuit' apply here too
 basicHostWithStaticEvents
-  :: forall a b.
+  :: forall a b. (Show a, Show b) =>
   [a] -- ^ list of input events to fire
   -> (forall t m. BasicGuestConstraints t m => Event t a -> BasicGuest t m (Event t b)) -- ^ function producing network from input events
   -> IO [[Maybe b]] -- ^ list of fired output events per input per frame that got processed for that input
 basicHostWithStaticEvents inputs guestfn =
   withSpiderTimeline $ runSpiderHostForTimeline $ do
-
+    liftIO $ print 1
     triggerEventChan <- liftIO newChan
     (postBuild, postBuildTriggerRef) <- newEventWithTriggerRef
     (inputEvent, inputEventTriggerRef) <- newEventWithTriggerRef
@@ -367,15 +367,16 @@ basicHostWithStaticEvents inputs guestfn =
       . flip runTriggerEventT triggerEventChan
       . flip runPostBuildT postBuild
       $ unBasicGuest (guestfn inputEvent)
-
+    liftIO $ print 2
     hOutput <- subscribeEvent eOutput
+    liftIO $ print 3
     let
       runFrame firings = fire firings (readEvent hOutput >>= sequenceA)
 
     -- fire PostBuild event and ignore outputs
     readRef postBuildTriggerRef
       >>= traverse_ (\t -> runFrame [t ==> ()])
-
+    liftIO $ print 4
     forM inputs $ \input -> do
       -- run network for input
       inputET <- readRef inputEventTriggerRef
@@ -383,6 +384,7 @@ basicHostWithStaticEvents inputs guestfn =
         Nothing -> error "no input trigger ref, this should never happen"
         Just x  -> runFrame [x ==> input]
 
+      liftIO $ print ("5 " <> show input)
 
 
       let
@@ -401,9 +403,10 @@ basicHostWithStaticEvents inputs guestfn =
           [] -> return []
           _  -> runFrame triggers
 
+      liftIO $ print 6
       -- fire IO callbacks for each event we triggered this frame
       liftIO . for_ eventsAndTriggers $
         \(_ :=> TriggerInvocation _ cb) -> cb
-
+      liftIO $ print 7
       -- return collected output
       return $ outputs <> triggerOutputs

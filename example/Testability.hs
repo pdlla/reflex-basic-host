@@ -9,6 +9,9 @@ import           Reflex.Host.Basic (basicHostWithStaticEvents)
 
 main :: IO ()
 main = do
+  -- you must type annotate or you will end up with build errors like
+  -- Couldn't match type ‘b’ with ‘Int’
+  --      ‘b’ is untouchable
   output :: [[Maybe Int]] <-
     basicHostWithStaticEvents [1..10 :: Int] $ \ev -> do
       -- simple state that takes input event and adds 1 to it
