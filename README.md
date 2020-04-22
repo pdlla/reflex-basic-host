@@ -1,3 +1,8 @@
+This fork adds host methods that are more useful for testing.
+
+I've switched to using https://github.com/pdlla/reflex-test-host instead which is basically the same but doesn't support TriggerEvent and PostBuild.
+
+
 # reflex-basic-host
 
 [![Build Status](https://travis-ci.org/qfpl/reflex-basic-host.svg?branch=master)](https://travis-ci.org/qfpl/reflex-basic-host)
